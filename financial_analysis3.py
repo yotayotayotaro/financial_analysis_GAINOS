@@ -9,6 +9,10 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- 設定 ---
 st.set_page_config(page_title="経営判断の「ものさし」", layout="wide")
 
+# --- セッション状態の初期化（重複送信防止用） ---
+if "is_data_sent" not in st.session_state:
+    st.session_state["is_data_sent"] = False
+
 # --- CSS (印刷レイアウト・最大化版) ---
 st.markdown("""
     <style>
@@ -50,8 +54,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Google Sheets 保存関数 ---
+# --- Google Sheets 保存関数（連打防止機能付き） ---
 def save_to_gsheet(data_row):
+    # すでに送信済みなら何もしない（CSVダウンロードのみ実行される）
+    if st.session_state["is_data_sent"]:
+        return
+
     try:
         if "gcp_service_account" not in st.secrets: return
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -60,6 +68,10 @@ def save_to_gsheet(data_row):
         client = gspread.authorize(creds)
         sheet = client.open("financial_db").sheet1
         sheet.append_row(data_row)
+        
+        # 送信完了フラグを立てる
+        st.session_state["is_data_sent"] = True
+        
     except Exception as e:
         print(f"Data Save Error: {e}")
 
@@ -92,11 +104,58 @@ def calc_score(val, t1, t2, t3, t4, lower_is_better=False):
 st.title("📏 経営判断の「ものさし」 by かんぎアドバイザーズ")
 st.markdown("数値を入れると**リアルタイム**で診断結果が変化します。")
 
+# サンプルデータ注入ボタン
+if st.button("▶ サンプル数値で試す（入力の手間を省略）", help="クリックすると架空の数値が自動入力されます"):
+    # 当期サンプル
+    st.session_state["sales_curr"] = 100000
+    st.session_state["cogs_curr"] = 70000
+    st.session_state["dep_curr"] = 2000
+    st.session_state["sga_curr"] = 25000
+    st.session_state["noi_curr"] = 500
+    st.session_state["noe_curr"] = 500
+    st.session_state["ext_i_curr"] = 0
+    st.session_state["ext_e_curr"] = 0
+    st.session_state["tax_curr"] = 1000
+    st.session_state["cash_curr"] = 15000
+    st.session_state["rec_curr"] = 12000
+    st.session_state["inv_curr"] = 5000
+    st.session_state["oca_curr"] = 1000
+    st.session_state["fa_curr"] = 20000
+    st.session_state["pay_curr"] = 8000
+    st.session_state["sl_curr"] = 10000
+    st.session_state["ocl_curr"] = 2000
+    st.session_state["ll_curr"] = 20000
+    st.session_state["na_curr"] = 13000
+    st.session_state["emp_curr"] = 10
+    # 前期サンプル
+    st.session_state["sales_prev"] = 90000
+    st.session_state["cogs_prev"] = 63000
+    st.session_state["dep_prev"] = 2000
+    st.session_state["sga_prev"] = 24000
+    st.session_state["noi_prev"] = 0
+    st.session_state["noe_prev"] = 500
+    st.session_state["ext_i_prev"] = 0
+    st.session_state["ext_e_prev"] = 0
+    st.session_state["tax_prev"] = 500
+    st.session_state["cash_prev"] = 10000
+    st.session_state["rec_prev"] = 10000
+    st.session_state["inv_prev"] = 4000
+    st.session_state["oca_prev"] = 1000
+    st.session_state["fa_prev"] = 20000
+    st.session_state["pay_prev"] = 7000
+    st.session_state["sl_prev"] = 10000
+    st.session_state["ocl_prev"] = 2000
+    st.session_state["ll_prev"] = 22000
+    st.session_state["na_prev"] = 10000
+    st.session_state["emp_prev"] = 9
+    st.rerun()
+
 # 入力エリア
 with st.expander("📝 データの入力・修正（クリックで開閉）", expanded=True):
     st.info("💡 入力単位は**「千円」**です。Enterキーを押すと即座に反映されます。")
     col_basic1, col_basic2 = st.columns(2)
-    company_name = col_basic1.text_input("会社名", "サンプル商事")
+    # ★修正：初期値は空欄（プレースホルダーのみ）にしたいが、数値型なので0を表示
+    company_name = col_basic1.text_input("会社名", "")
     industry = col_basic2.selectbox("業種", ["製造業", "建設業", "卸売業", "小売業", "サービス業", "その他"])
     input_data = {}
     
@@ -104,66 +163,62 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
         d = {}
         st.markdown(f"### {label_color}")
         col1, col2, col3 = st.columns(3)
-        def num_input(label, key, val=0):
-            return st.number_input(label, value=int(val), step=100, format="%d", key=key)
         
-        # --- P/L (損益計算書) ---
+        # ★修正: 初期値をすべて0にする
+        def num_input(label, key, val=0):
+            if key not in st.session_state:
+                st.session_state[key] = int(val)
+            return st.number_input(label, key=key, step=100, format="%d")
+        
         with col1:
             st.markdown("##### P/L (損益計算書)")
-            d['sales'] = num_input("売上高", f"sales_{key_suffix}", 100000)
-            d['cogs'] = num_input("売上原価", f"cogs_{key_suffix}", 70000)
-            d['depreciation'] = num_input("  うち減価償却費", f"dep_{key_suffix}", 2000)
+            d['sales'] = num_input("売上高", f"sales_{key_suffix}", 0) # 0に変更
+            d['cogs'] = num_input("売上原価", f"cogs_{key_suffix}", 0)
+            d['depreciation'] = num_input("  うち減価償却費", f"dep_{key_suffix}", 0)
             d['gross_profit'] = d['sales'] - d['cogs']
             st.caption(f"粗利: {fmt_yen(d['gross_profit'])}")
-            
-            d['sga'] = num_input("販管費", f"sga_{key_suffix}", 25000)
+            d['sga'] = num_input("販管費", f"sga_{key_suffix}", 0)
             d['op_profit'] = d['gross_profit'] - d['sga']
             st.caption(f"営業利益: {fmt_yen(d['op_profit'])}") 
-            
             d['non_op_inc'] = num_input("営業外収益", f"noi_{key_suffix}", 0)
-            d['non_op_exp'] = num_input("営業外費用", f"noe_{key_suffix}", 500)
+            d['non_op_exp'] = num_input("営業外費用", f"noe_{key_suffix}", 0)
             d['ord_profit'] = d['op_profit'] + d['non_op_inc'] - d['non_op_exp']
-            st.caption(f"経常利益: {fmt_yen(d['ord_profit'])}") # ★追加: 経常利益
-            
-            d['extra_inc'] = num_input("特別利益", f"ext_i_{key_suffix}", 0) # ★追加
-            d['extra_exp'] = num_input("特別損失", f"ext_e_{key_suffix}", 0) # ★追加
+            st.caption(f"経常利益: {fmt_yen(d['ord_profit'])}") 
+            d['extra_inc'] = num_input("特別利益", f"ext_i_{key_suffix}", 0) 
+            d['extra_exp'] = num_input("特別損失", f"ext_e_{key_suffix}", 0) 
             d['pre_tax_profit'] = d['ord_profit'] + d['extra_inc'] - d['extra_exp']
-            st.caption(f"税引前利益: {fmt_yen(d['pre_tax_profit'])}") # ★追加: 税引前
-            
-            d['tax'] = num_input("法人税等", f"tax_{key_suffix}", 500)
+            st.caption(f"税引前利益: {fmt_yen(d['pre_tax_profit'])}") 
+            d['tax'] = num_input("法人税等", f"tax_{key_suffix}", 0)
             d['net_profit'] = d['pre_tax_profit'] - d['tax']
-            st.caption(f"当期純利益: {fmt_yen(d['net_profit'])}") # ★追加: 純利益
+            st.caption(f"当期純利益: {fmt_yen(d['net_profit'])}") 
 
-        # --- B/S (資産) ---
         with col2:
             st.markdown("##### B/S (資産)")
-            d['cash'] = num_input("現預金", f"cash_{key_suffix}", 15000)
-            d['receivables'] = num_input("売上債権", f"rec_{key_suffix}", 12000)
-            d['inventory'] = num_input("棚卸資産", f"inv_{key_suffix}", 5000)
-            d['other_ca'] = num_input("その他流動資産", f"oca_{key_suffix}", 1000)
+            d['cash'] = num_input("現預金", f"cash_{key_suffix}", 0)
+            d['receivables'] = num_input("売上債権", f"rec_{key_suffix}", 0)
+            d['inventory'] = num_input("棚卸資産", f"inv_{key_suffix}", 0)
+            d['other_ca'] = num_input("その他流動資産", f"oca_{key_suffix}", 0)
             d['current_assets'] = d['cash'] + d['receivables'] + d['inventory'] + d['other_ca']
-            d['fixed_assets'] = num_input("固定資産合計", f"fa_{key_suffix}", 20000)
+            d['fixed_assets'] = num_input("固定資産合計", f"fa_{key_suffix}", 0)
             d['total_assets'] = d['current_assets'] + d['fixed_assets']
             st.markdown("---")
             st.metric("資産合計", fmt_yen(d['total_assets']))
 
-        # --- B/S (負債・純資産) ---
         with col3:
             st.markdown("##### B/S (負債・純資産)")
-            d['payables'] = num_input("仕入債務", f"pay_{key_suffix}", 8000)
-            d['short_loan'] = num_input("短期借入金", f"sl_{key_suffix}", 10000)
-            d['other_cl'] = num_input("その他流動負債", f"ocl_{key_suffix}", 2000)
+            d['payables'] = num_input("仕入債務", f"pay_{key_suffix}", 0)
+            d['short_loan'] = num_input("短期借入金", f"sl_{key_suffix}", 0)
+            d['other_cl'] = num_input("その他流動負債", f"ocl_{key_suffix}", 0)
             d['current_liab'] = d['payables'] + d['short_loan'] + d['other_cl']
-            d['long_loan'] = num_input("長期借入金", f"ll_{key_suffix}", 20000)
+            d['long_loan'] = num_input("長期借入金", f"ll_{key_suffix}", 0)
             d['fixed_liab'] = d['long_loan'] 
-            d['net_assets'] = num_input("純資産合計", f"na_{key_suffix}", 13000)
+            d['net_assets'] = num_input("純資産合計", f"na_{key_suffix}", 0)
             d['total_liab_equity'] = d['current_liab'] + d['fixed_liab'] + d['net_assets']
             st.markdown("---")
             st.metric("負債・純資産", fmt_yen(d['total_liab_equity']))
-            
             st.markdown("##### その他")
-            d['employees'] = st.number_input(f"従業員数", value=10, step=1, format="%d", key=f"emp_{key_suffix}")
-
+            d['employees'] = num_input("従業員数", f"emp_{key_suffix}", 0)
+        
         diff = d['total_assets'] - d['total_liab_equity']
         if diff != 0: st.error(f"⚠️ 貸借不一致: {fmt_yen(diff)}")
         else: st.success("✅ 貸借一致")
@@ -325,6 +380,7 @@ raw_data_list = [
     # P/L
     {"区分": "P/L", "項目": "売上高", "当期_数値": c['sales'], "単位": "千円", "前期_数値": p['sales'], "説明": "-"},
     {"区分": "P/L", "項目": "売上原価", "当期_数値": c['cogs'], "単位": "千円", "前期_数値": p['cogs'], "説明": "-"},
+    {"区分": "P/L", "項目": "減価償却費", "当期_数値": c['depreciation'], "単位": "千円", "前期_数値": p['depreciation'], "説明": "-"},
     {"区分": "P/L", "項目": "売上総利益", "当期_数値": c['gross_profit'], "単位": "千円", "前期_数値": p['gross_profit'], "説明": "-"},
     {"区分": "P/L", "項目": "販管費", "当期_数値": c['sga'], "単位": "千円", "前期_数値": p['sga'], "説明": "-"},
     {"区分": "P/L", "項目": "営業利益", "当期_数値": c['op_profit'], "単位": "千円", "前期_数値": p['op_profit'], "説明": "-"},
@@ -373,6 +429,10 @@ if st.button("🖨️ レポートを印刷 (PDF保存)"):
     except:
         pass
     components.html("<script>window.parent.print();</script>", height=0, width=0)
+
+# 重複送信の通知
+if st.session_state["is_data_sent"]:
+    st.info("✅ データは送信済みです。修正して再送信したい場合は、ページを再読み込みしてください。")
 
 st.markdown("---")
 st.caption("""
