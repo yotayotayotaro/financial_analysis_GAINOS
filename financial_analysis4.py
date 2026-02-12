@@ -9,10 +9,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- 設定 ---
 st.set_page_config(page_title="経営判断の「ものさし」", layout="wide")
 
-# --- セッション状態の初期化（重複送信防止用） ---
-if "is_data_sent" not in st.session_state:
-    st.session_state["is_data_sent"] = False
-
 # --- CSS (印刷レイアウト・最大化版) ---
 st.markdown("""
     <style>
@@ -54,25 +50,23 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Google Sheets 保存関数（連打防止機能付き） ---
+# --- Google Sheets 保存関数（制限なし・シンプル版） ---
 def save_to_gsheet(data_row):
-    # すでに送信済みなら何もしない（CSVダウンロードのみ実行される）
-    if st.session_state["is_data_sent"]:
-        return
-
     try:
         if "gcp_service_account" not in st.secrets: return
+        
+        # 認証とシートオープン
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds_dict = st.secrets["gcp_service_account"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open("financial_db").sheet1
+        
+        # データの書き込み（無条件で追記）
         sheet.append_row(data_row)
         
-        # 送信完了フラグを立てる
-        st.session_state["is_data_sent"] = True
-        
     except Exception as e:
+        # エラー時はコンソールに出力（ユーザーには見せないがログに残す）
         print(f"Data Save Error: {e}")
 
 # --- 関数群 ---
@@ -154,7 +148,7 @@ if st.button("▶ サンプル数値で試す（入力の手間を省略）", he
 with st.expander("📝 データの入力・修正（クリックで開閉）", expanded=True):
     st.info("💡 入力単位は**「千円」**です。Enterキーを押すと即座に反映されます。")
     col_basic1, col_basic2 = st.columns(2)
-    # ★修正：初期値は空欄（プレースホルダーのみ）にしたいが、数値型なので0を表示
+    # 初期値は空欄（プレースホルダーのみ）にしたいが、数値型なので0を表示
     company_name = col_basic1.text_input("会社名", "")
     industry = col_basic2.selectbox("業種", ["製造業", "建設業", "卸売業", "小売業", "サービス業", "その他"])
     input_data = {}
@@ -164,7 +158,7 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
         st.markdown(f"### {label_color}")
         col1, col2, col3 = st.columns(3)
         
-        # ★修正: 初期値をすべて0にする
+        # 初期値をすべて0にする
         def num_input(label, key, val=0):
             if key not in st.session_state:
                 st.session_state[key] = int(val)
@@ -172,7 +166,7 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
         
         with col1:
             st.markdown("##### P/L (損益計算書)")
-            d['sales'] = num_input("売上高", f"sales_{key_suffix}", 0) # 0に変更
+            d['sales'] = num_input("売上高", f"sales_{key_suffix}", 0) 
             d['cogs'] = num_input("売上原価", f"cogs_{key_suffix}", 0)
             d['depreciation'] = num_input("  うち減価償却費", f"dep_{key_suffix}", 0)
             d['gross_profit'] = d['sales'] - d['cogs']
@@ -429,10 +423,6 @@ if st.button("🖨️ レポートを印刷 (PDF保存)"):
     except:
         pass
     components.html("<script>window.parent.print();</script>", height=0, width=0)
-
-# 重複送信の通知
-if st.session_state["is_data_sent"]:
-    st.info("✅ データは送信済みです。修正して再送信したい場合は、ページを再読み込みしてください。")
 
 st.markdown("---")
 st.caption("""
