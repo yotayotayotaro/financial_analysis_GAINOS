@@ -1,0 +1,11 @@
+streamlit
+mediapipe
+opencv-python-headless
+numpy
+pandas
+plotly
+statsmodels
+matplotlib
+seaborn
+gspread
+oauth2client
