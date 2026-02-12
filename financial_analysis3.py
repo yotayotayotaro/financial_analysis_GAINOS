@@ -106,6 +106,8 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
         col1, col2, col3 = st.columns(3)
         def num_input(label, key, val=0):
             return st.number_input(label, value=int(val), step=100, format="%d", key=key)
+        
+        # --- P/L (損益計算書) ---
         with col1:
             st.markdown("##### P/L (損益計算書)")
             d['sales'] = num_input("売上高", f"sales_{key_suffix}", 100000)
@@ -113,13 +115,26 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
             d['depreciation'] = num_input("  うち減価償却費", f"dep_{key_suffix}", 2000)
             d['gross_profit'] = d['sales'] - d['cogs']
             st.caption(f"粗利: {fmt_yen(d['gross_profit'])}")
+            
             d['sga'] = num_input("販管費", f"sga_{key_suffix}", 25000)
             d['op_profit'] = d['gross_profit'] - d['sga']
-            st.caption(f"営利: {fmt_yen(d['op_profit'])}") 
+            st.caption(f"営業利益: {fmt_yen(d['op_profit'])}") 
+            
             d['non_op_inc'] = num_input("営業外収益", f"noi_{key_suffix}", 0)
             d['non_op_exp'] = num_input("営業外費用", f"noe_{key_suffix}", 500)
             d['ord_profit'] = d['op_profit'] + d['non_op_inc'] - d['non_op_exp']
+            st.caption(f"経常利益: {fmt_yen(d['ord_profit'])}") # ★追加: 経常利益
+            
+            d['extra_inc'] = num_input("特別利益", f"ext_i_{key_suffix}", 0) # ★追加
+            d['extra_exp'] = num_input("特別損失", f"ext_e_{key_suffix}", 0) # ★追加
+            d['pre_tax_profit'] = d['ord_profit'] + d['extra_inc'] - d['extra_exp']
+            st.caption(f"税引前利益: {fmt_yen(d['pre_tax_profit'])}") # ★追加: 税引前
+            
             d['tax'] = num_input("法人税等", f"tax_{key_suffix}", 500)
+            d['net_profit'] = d['pre_tax_profit'] - d['tax']
+            st.caption(f"当期純利益: {fmt_yen(d['net_profit'])}") # ★追加: 純利益
+
+        # --- B/S (資産) ---
         with col2:
             st.markdown("##### B/S (資産)")
             d['cash'] = num_input("現預金", f"cash_{key_suffix}", 15000)
@@ -131,6 +146,8 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
             d['total_assets'] = d['current_assets'] + d['fixed_assets']
             st.markdown("---")
             st.metric("資産合計", fmt_yen(d['total_assets']))
+
+        # --- B/S (負債・純資産) ---
         with col3:
             st.markdown("##### B/S (負債・純資産)")
             d['payables'] = num_input("仕入債務", f"pay_{key_suffix}", 8000)
@@ -143,8 +160,10 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
             d['total_liab_equity'] = d['current_liab'] + d['fixed_liab'] + d['net_assets']
             st.markdown("---")
             st.metric("負債・純資産", fmt_yen(d['total_liab_equity']))
+            
             st.markdown("##### その他")
             d['employees'] = st.number_input(f"従業員数", value=10, step=1, format="%d", key=f"emp_{key_suffix}")
+
         diff = d['total_assets'] - d['total_liab_equity']
         if diff != 0: st.error(f"⚠️ 貸借不一致: {fmt_yen(diff)}")
         else: st.success("✅ 貸借一致")
@@ -279,22 +298,24 @@ if temp_kpis:
 # --- 保存用データの構築 (全データ・スプレッドシート用) ---
 save_row = [
     str(datetime.now()), company_name, industry, avg_score,
+    # 当期
     c['sales'], c['cogs'], c['depreciation'], c['gross_profit'], c['sga'], c['op_profit'], 
-    c['non_op_inc'], c['non_op_exp'], c['ord_profit'], c['tax'], 
+    c['non_op_inc'], c['non_op_exp'], c['ord_profit'], c['extra_inc'], c['extra_exp'], c['pre_tax_profit'], c['tax'], c['net_profit'], 
     c['cash'], c['receivables'], c['inventory'], c['other_ca'], c['current_assets'], c['fixed_assets'], c['total_assets'],
     c['payables'], c['short_loan'], c['other_cl'], c['current_liab'], c['long_loan'], c['fixed_liab'], c['net_assets'], c['total_liab_equity'],
     c['employees'],
+    # 前期
     p['sales'], p['cogs'], p['depreciation'], p['gross_profit'], p['sga'], p['op_profit'], 
-    p['non_op_inc'], p['non_op_exp'], p['ord_profit'], p['tax'], 
+    p['non_op_inc'], p['non_op_exp'], p['ord_profit'], p['extra_inc'], p['extra_exp'], p['pre_tax_profit'], p['tax'], p['net_profit'],
     p['cash'], p['receivables'], p['inventory'], p['other_ca'], p['current_assets'], p['fixed_assets'], p['total_assets'],
     p['payables'], p['short_loan'], p['other_cl'], p['current_liab'], p['long_loan'], p['fixed_liab'], p['net_assets'], p['total_liab_equity'],
     p['employees'],
+    # 指標
     c_op_margin, c_fcf, c_sales_growth, c_op_growth, c_fixed_turn, c_inv_days,
     c_sales_per_emp, c_op_per_emp, c_equity_ratio, c_working_capital, c_current_ratio, c_redemption, c_loan_sales_ratio
 ]
 
 # --- CSVダウンロード用データの作成 (全データ) ---
-# ★修正ポイント：CSVも全データになるようにリストを作成
 raw_data_list = [
     {"区分": "基本情報", "項目": "診断日時", "当期_数値": str(datetime.now()), "単位": "-", "前期_数値": "-", "説明": "-"},
     {"区分": "基本情報", "項目": "会社名", "当期_数値": company_name, "単位": "-", "前期_数値": "-", "説明": "-"},
@@ -304,31 +325,25 @@ raw_data_list = [
     # P/L
     {"区分": "P/L", "項目": "売上高", "当期_数値": c['sales'], "単位": "千円", "前期_数値": p['sales'], "説明": "-"},
     {"区分": "P/L", "項目": "売上原価", "当期_数値": c['cogs'], "単位": "千円", "前期_数値": p['cogs'], "説明": "-"},
-    {"区分": "P/L", "項目": "減価償却費", "当期_数値": c['depreciation'], "単位": "千円", "前期_数値": p['depreciation'], "説明": "-"},
     {"区分": "P/L", "項目": "売上総利益", "当期_数値": c['gross_profit'], "単位": "千円", "前期_数値": p['gross_profit'], "説明": "-"},
     {"区分": "P/L", "項目": "販管費", "当期_数値": c['sga'], "単位": "千円", "前期_数値": p['sga'], "説明": "-"},
     {"区分": "P/L", "項目": "営業利益", "当期_数値": c['op_profit'], "単位": "千円", "前期_数値": p['op_profit'], "説明": "-"},
     {"区分": "P/L", "項目": "営業外収益", "当期_数値": c['non_op_inc'], "単位": "千円", "前期_数値": p['non_op_inc'], "説明": "-"},
     {"区分": "P/L", "項目": "営業外費用", "当期_数値": c['non_op_exp'], "単位": "千円", "前期_数値": p['non_op_exp'], "説明": "-"},
     {"区分": "P/L", "項目": "経常利益", "当期_数値": c['ord_profit'], "単位": "千円", "前期_数値": p['ord_profit'], "説明": "-"},
+    {"区分": "P/L", "項目": "特別利益", "当期_数値": c['extra_inc'], "単位": "千円", "前期_数値": p['extra_inc'], "説明": "-"},
+    {"区分": "P/L", "項目": "特別損失", "当期_数値": c['extra_exp'], "単位": "千円", "前期_数値": p['extra_exp'], "説明": "-"},
+    {"区分": "P/L", "項目": "税引前当期純利益", "当期_数値": c['pre_tax_profit'], "単位": "千円", "前期_数値": p['pre_tax_profit'], "説明": "-"},
     {"区分": "P/L", "項目": "法人税等", "当期_数値": c['tax'], "単位": "千円", "前期_数値": p['tax'], "説明": "-"},
+    {"区分": "P/L", "項目": "当期純利益", "当期_数値": c['net_profit'], "単位": "千円", "前期_数値": p['net_profit'], "説明": "-"},
 
     # B/S
-    {"区分": "B/S", "項目": "現預金", "当期_数値": c['cash'], "単位": "千円", "前期_数値": p['cash'], "説明": "-"},
-    {"区分": "B/S", "項目": "売上債権", "当期_数値": c['receivables'], "単位": "千円", "前期_数値": p['receivables'], "説明": "-"},
-    {"区分": "B/S", "項目": "棚卸資産", "当期_数値": c['inventory'], "単位": "千円", "前期_数値": p['inventory'], "説明": "-"},
-    {"区分": "B/S", "項目": "その他流動資産", "当期_数値": c['other_ca'], "単位": "千円", "前期_数値": p['other_ca'], "説明": "-"},
     {"区分": "B/S", "項目": "流動資産計", "当期_数値": c['current_assets'], "単位": "千円", "前期_数値": p['current_assets'], "説明": "-"},
     {"区分": "B/S", "項目": "固定資産", "当期_数値": c['fixed_assets'], "単位": "千円", "前期_数値": p['fixed_assets'], "説明": "-"},
     {"区分": "B/S", "項目": "総資産", "当期_数値": c['total_assets'], "単位": "千円", "前期_数値": p['total_assets'], "説明": "-"},
-    {"区分": "B/S", "項目": "仕入債務", "当期_数値": c['payables'], "単位": "千円", "前期_数値": p['payables'], "説明": "-"},
-    {"区分": "B/S", "項目": "短期借入金", "当期_数値": c['short_loan'], "単位": "千円", "前期_数値": p['short_loan'], "説明": "-"},
-    {"区分": "B/S", "項目": "その他流動負債", "当期_数値": c['other_cl'], "単位": "千円", "前期_数値": p['other_cl'], "説明": "-"},
     {"区分": "B/S", "項目": "流動負債計", "当期_数値": c['current_liab'], "単位": "千円", "前期_数値": p['current_liab'], "説明": "-"},
-    {"区分": "B/S", "項目": "長期借入金", "当期_数値": c['long_loan'], "単位": "千円", "前期_数値": p['long_loan'], "説明": "-"},
     {"区分": "B/S", "項目": "固定負債", "当期_数値": c['fixed_liab'], "単位": "千円", "前期_数値": p['fixed_liab'], "説明": "-"},
     {"区分": "B/S", "項目": "純資産", "当期_数値": c['net_assets'], "単位": "千円", "前期_数値": p['net_assets'], "説明": "-"},
-    {"区分": "B/S", "項目": "負債純資産計", "当期_数値": c['total_liab_equity'], "単位": "千円", "前期_数値": p['total_liab_equity'], "説明": "-"},
     {"区分": "その他", "項目": "従業員数", "当期_数値": c['employees'], "単位": "人", "前期_数値": p['employees'], "説明": "-"},
 ]
 # 指標KPIも追加
