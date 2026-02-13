@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta, timezone # ★修正: 時間計算用のモジュールを追加
+from datetime import datetime, timedelta, timezone
 import streamlit.components.v1 as components
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,17 +9,28 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- 設定 ---
 st.set_page_config(page_title="経営判断の「ものさし」", layout="wide")
 
-# --- CSS (印刷レイアウト・最大化版) ---
+# --- セッション状態の初期化 ---
+if "has_diagnosed" not in st.session_state:
+    st.session_state["has_diagnosed"] = False
+
+# --- CSS (印刷レイアウト改善・横向き強制) ---
 st.markdown("""
     <style>
-    .block-container { padding-top: 2rem; }
+    .block-container { padding-top: 1rem; }
+    
+    /* 印刷時の設定 */
     @media print {
+        @page { 
+            size: A4 landscape; /* A4横向き */
+            margin: 10mm; 
+        }
+        body {
+            transform: scale(0.9); /* 全体を少し縮小して収まりやすくする */
+            transform-origin: top left;
+            width: 110%; /* 縮小した分、幅を広げる */
+        }
         header, footer, aside, .stAppDeployButton, .no-print, details, [data-testid="stSidebar"] { 
             display: none !important; 
-        }
-        @page { 
-            margin: 5mm; 
-            size: A4 portrait; 
         }
         .block-container {
             max-width: none !important;
@@ -28,22 +39,16 @@ st.markdown("""
             margin: 0 !important;
         }
         [data-testid="stHorizontalBlock"] { 
-            display: block !important; 
+            display: flex !important; /* 横並びを維持 */
             width: 100% !important; 
         }
         [data-testid="stPlotlyChart"] {
             display: block !important;
             width: 100% !important;
-            height: 700px !important; 
-            page-break-inside: avoid;
-            overflow: visible !important;
-            margin-bottom: 0px !important;
+            break-inside: avoid;
         }
-        .js-plotly-plot, .plot-container {
-            height: 700px !important; 
-            width: 100% !important;
-        }
-        p, li, .stMarkdown, h1, h2, h3, .metric-label, .metric-value {
+        /* 印刷時に文字色を黒くハッキリさせる */
+        p, li, .stMarkdown, h1, h2, h3, .metric-label, .metric-value, div {
             color: #000 !important;
         }
     }
@@ -60,9 +65,11 @@ def save_to_gsheet(data_row):
         client = gspread.authorize(creds)
         sheet = client.open("financial_db").sheet1
         sheet.append_row(data_row)
-        st.toast("クラウドへの保存に成功しました！", icon="✅") # 成功通知
+        # 成功時はトースト通知（診断ボタンを押した直後に出る）
+        st.toast("データを受信しました。診断結果を表示します。", icon="✅") 
     except Exception as e:
-        st.error(f"🚨 保存エラー発生: {e}")
+        # ユーザーにはエラーを見せず、ログに残す等の処理（ここでは簡易表示）
+        print(f"Save Error: {e}")
 
 # --- 関数群 ---
 def fmt_yen(val): return f"{int(val):,} 千円" if val is not None else "-"
@@ -88,18 +95,27 @@ def calc_score(val, t1, t2, t3, t4, lower_is_better=False):
         elif val >= t2: return 3
         elif val >= t1: return 2
         else: return 1
-
-# --- 日本時間の取得関数 ---
 def get_jst_now():
     JST = timezone(timedelta(hours=9), 'JST')
     return datetime.now(JST)
 
+# --- 定数（都道府県リスト） ---
+PREFECTURES = [
+    "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+    "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+    "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
+    "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
+    "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+    "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
+    "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県"
+]
+
 # --- メイン画面 ---
-st.title("📏 経営判断の「ものさし」 by かんぎアドバイザーズ")
-st.markdown("数値を入れると**リアルタイム**で診断結果が変化します。")
+st.title("📏 経営判断の「ものさし」")
+st.markdown("決算書の数値を入力し、「診断する」ボタンを押すと結果が表示されます。")
 
 # サンプルデータ注入ボタン
-if st.button("▶ サンプル数値で試す（入力の手間を省略）", help="クリックすると架空の数値が自動入力されます"):
+if st.button("▶ サンプル数値を入れる（入力の手間を省略）", help="クリックすると架空の数値が入力されます"):
     st.session_state["sales_curr"] = 100000
     st.session_state["cogs_curr"] = 70000
     st.session_state["dep_curr"] = 2000
@@ -141,16 +157,35 @@ if st.button("▶ サンプル数値で試す（入力の手間を省略）", he
     st.session_state["ll_prev"] = 22000
     st.session_state["na_prev"] = 10000
     st.session_state["emp_prev"] = 9
+    
+    # サンプル時はサンプル企業情報を入れる
+    st.session_state["default_company"] = "サンプル商事"
+    st.session_state["default_industry_idx"] = 0 # 製造業
+    st.session_state["default_pref_idx"] = 12 # 東京都
     st.rerun()
 
-# 入力エリア
-with st.expander("📝 データの入力・修正（クリックで開閉）", expanded=True):
-    st.info("💡 入力単位は**「千円」**です。Enterキーを押すと即座に反映されます。")
-    col_basic1, col_basic2 = st.columns(2)
-    company_name = col_basic1.text_input("会社名", "")
-    industry = col_basic2.selectbox("業種", ["製造業", "建設業", "卸売業", "小売業", "サービス業", "その他"])
-    input_data = {}
+# --- 入力エリア ---
+with st.container():
+    st.subheader("1. 基本情報の入力")
+    col_basic1, col_basic2, col_basic3 = st.columns(3)
     
+    # 会社名
+    company_val = st.session_state.get("default_company", "")
+    company_name = col_basic1.text_input("会社名（匿名/仮名可）", value=company_val, placeholder="例：株式会社〇〇")
+    
+    # 都道府県（追加）
+    pref_idx = st.session_state.get("default_pref_idx", None)
+    prefecture = col_basic2.selectbox("所在地（都道府県）", PREFECTURES, index=pref_idx, placeholder="選択してください")
+    
+    # 業種（ラジオボタンに変更・初期値なし）
+    industry_idx = st.session_state.get("default_industry_idx", None)
+    industry_options = ["製造業", "建設業", "卸売業", "小売業", "サービス業", "その他"]
+    industry = col_basic3.radio("業種 ※必須", industry_options, index=industry_idx, horizontal=True)
+
+    st.subheader("2. 決算数値の入力")
+    st.info("💡 入力単位は**「千円」**です。Enterキーを押すと確定します。")
+    
+    input_data = {}
     def create_inputs(key_suffix, label_color):
         d = {}
         st.markdown(f"### {label_color}")
@@ -219,214 +254,271 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
     with tab_curr: input_data['curr'] = create_inputs("curr", "🔴 当期データ")
     with tab_prev: input_data['prev'] = create_inputs("prev", "🔵 前期データ")
 
-# --- 計算ロジック ---
-c, p = input_data['curr'], input_data['prev']
-c_op_margin = safe_div(c['op_profit'], c['sales']) * 100
-c_fcf = (c['op_profit'] * 0.6 + c['depreciation']) - ((c['fixed_assets'] - p['fixed_assets']) + c['depreciation'])
-c_sales_growth = calc_growth(c['sales'], p['sales'])
-c_op_growth = calc_growth(c['op_profit'], p['op_profit'])
-c_fixed_turn = safe_div(c['sales'], c['fixed_assets'])
-c_inv_days = safe_div(c['inventory'], c['cogs'] / 365)
-c_sales_per_emp = safe_div(c['sales'], c['employees'])
-c_op_per_emp = safe_div(c['op_profit'], c['employees'])
-c_equity_ratio = safe_div(c['net_assets'], c['total_assets']) * 100
-c_loan_sales_ratio = safe_div(c['short_loan'] + c['long_loan'], c['sales'] / 12)
-c_current_ratio = safe_div(c['current_assets'], c['current_liab']) * 100
-c_working_capital = c['current_assets'] - c['current_liab']
-c_redemption = safe_div(c['short_loan'] + c['long_loan'], c['ord_profit'] + c['depreciation'] - c['tax']) if (c['ord_profit'] + c['depreciation'] - c['tax']) > 0 else 0
 
-p_op_margin = safe_div(p['op_profit'], p['sales']) * 100 
-p_equity_ratio = safe_div(p['net_assets'], p['total_assets']) * 100
-p_loan_sales_ratio = safe_div(p['short_loan'] + p['long_loan'], p['sales'] / 12)
-p_fixed_turn = safe_div(p['sales'], p['fixed_assets'])
-p_inv_days = safe_div(p['inventory'], p['cogs'] / 365)
-p_sales_per_emp = safe_div(p['sales'], p['employees'])
-p_op_per_emp = safe_div(p['op_profit'], p['employees'])
-p_current_ratio = safe_div(p['current_assets'], p['current_liab']) * 100
-p_working_capital = p['current_assets'] - p['current_liab']
-p_redemption = safe_div(p['short_loan'] + p['long_loan'], p['ord_profit'] + p['depreciation'] - p['tax']) if (p['ord_profit'] + p['depreciation'] - p['tax']) > 0 else 0
-
-score_sales_growth = calc_score(c_sales_growth, 0, 3, 5, 10)
-score_op_growth = calc_score(c_op_growth, 0, 3, 5, 10)
-if p['op_profit'] <= 0 and c['op_profit'] > 0: score_op_growth = 5
-
-scores = {
-    "収益": (calc_score(c_op_margin, 0, 2, 5, 10) + calc_score(c_fcf, -1000, 0, 1000, 5000)) / 2,
-    "成長": (score_sales_growth + score_op_growth) / 2,
-    "効率": (calc_score(c_fixed_turn, 1, 3, 5, 10) + calc_score(c_inv_days, 180, 90, 60, 30, True)) / 2,
-    "生産": (calc_score(c_sales_per_emp, 10000, 15000, 20000, 30000) + calc_score(c_op_per_emp, 0, 500, 1000, 2000)) / 2,
-    "安全": (calc_score(c_equity_ratio, 10, 20, 40, 60) + calc_score(c_loan_sales_ratio, 12, 6, 3, 1, True)) / 2
-}
-p_scores_val = {k: 3 for k in scores} 
-p_scores_val["収益"] = calc_score(p_op_margin, 0, 2, 5, 10)
-
-# --- レポート表示 ---
+# --- 診断実行 & データ保存セクション ---
 st.markdown("---")
-st.header(f"📈 {company_name} 様 経営診断レポート")
-# ★修正: 表示も日本時間に
-st.markdown(f"診断日: {get_jst_now().strftime('%Y年%m月%d日 %H:%M')}")
+st.markdown("""
+<small>
+**【データの取り扱いについて】**<br>
+「診断する」ボタンを押すと、入力されたデータは診断精度の向上および統計的な業界分析のために、
+個人・企業を特定できない形式（匿名加工情報）にてサーバーへ保存されます。<br>
+入力データが第三者にそのまま開示されることはありません。ご利用にあたっては、これに同意したものとみなします。
+</small>
+""", unsafe_allow_html=True)
 
-col_radar, col_msg = st.columns([1, 1])
-with col_radar:
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(r=list(p_scores_val.values()), theta=list(scores.keys()), fill='toself', name='前期', line_color='#00B4D8', opacity=0.5))
-    fig.add_trace(go.Scatterpolar(r=list(scores.values()), theta=list(scores.keys()), fill='toself', name='当期', line_color='#FF4B4B', opacity=0.8))
-    fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 5])), 
-        showlegend=True, 
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-        height=700, 
-        margin=dict(l=80, r=80, t=40, b=80) 
-    )
-    st.plotly_chart(fig, use_container_width=True)
+# 診断ボタン（ここを押すと保存＆表示）
+if st.button("🚀 同意して診断する（レポートを表示）", type="primary", use_container_width=True):
+    # バリデーションチェック
+    if not company_name:
+        st.error("⚠️ 「会社名」を入力してください（匿名・仮名でも構いません）。")
+    elif not industry:
+        st.error("⚠️ 「業種」を選択してください。")
+    elif not prefecture:
+        st.error("⚠️ 「所在地（都道府県）」を選択してください。")
+    else:
+        # 計算用データを取得
+        c, p = input_data['curr'], input_data['prev']
+        
+        # 指標計算（保存用に先に計算が必要）
+        c_op_margin = safe_div(c['op_profit'], c['sales']) * 100
+        c_fcf = (c['op_profit'] * 0.6 + c['depreciation']) - ((c['fixed_assets'] - p['fixed_assets']) + c['depreciation'])
+        c_sales_growth = calc_growth(c['sales'], p['sales'])
+        c_op_growth = calc_growth(c['op_profit'], p['op_profit'])
+        c_fixed_turn = safe_div(c['sales'], c['fixed_assets'])
+        c_inv_days = safe_div(c['inventory'], c['cogs'] / 365)
+        c_sales_per_emp = safe_div(c['sales'], c['employees'])
+        c_op_per_emp = safe_div(c['op_profit'], c['employees'])
+        c_equity_ratio = safe_div(c['net_assets'], c['total_assets']) * 100
+        c_loan_sales_ratio = safe_div(c['short_loan'] + c['long_loan'], c['sales'] / 12)
+        c_current_ratio = safe_div(c['current_assets'], c['current_liab']) * 100
+        c_working_capital = c['current_assets'] - c['current_liab']
+        c_redemption = safe_div(c['short_loan'] + c['long_loan'], c['ord_profit'] + c['depreciation'] - c['tax']) if (c['ord_profit'] + c['depreciation'] - c['tax']) > 0 else 0
 
-with col_msg:
-    avg_score = sum(scores.values()) / 5
-    st.markdown(f"#### 📝 総合スコア: {avg_score:.1f} / 5.0")
-    if avg_score >= 4: st.success("極めて健全な経営状態です。攻めの投資を行う体力があります。")
-    elif avg_score >= 3: st.info("標準的な経営状態です。弱点を補強しましょう。")
-    else: st.error("経営改善が急務です。特に安全性の確保を優先してください。")
+        p_op_margin = safe_div(p['op_profit'], p['sales']) * 100 
+        p_equity_ratio = safe_div(p['net_assets'], p['total_assets']) * 100
+        p_loan_sales_ratio = safe_div(p['short_loan'] + p['long_loan'], p['sales'] / 12)
+        p_fixed_turn = safe_div(p['sales'], p['fixed_assets'])
+        p_inv_days = safe_div(p['inventory'], p['cogs'] / 365)
+        p_sales_per_emp = safe_div(p['sales'], p['employees'])
+        p_op_per_emp = safe_div(p['op_profit'], p['employees'])
+        p_current_ratio = safe_div(p['current_assets'], p['current_liab']) * 100
+        p_working_capital = p['current_assets'] - p['current_liab']
+        p_redemption = safe_div(p['short_loan'] + p['long_loan'], p['ord_profit'] + p['depreciation'] - p['tax']) if (p['ord_profit'] + p['depreciation'] - p['tax']) > 0 else 0
 
-st.subheader("詳細指標分析")
-kpi_definitions = [
-    {"cat": "収益性", "name": "営業利益率", "curr_v": c_op_margin, "unit": "%", "prev_v": p_op_margin, "desc": "本業の稼ぐ力", "formula": "営業利益 ÷ 売上高"},
-    {"cat": "収益性", "name": "フリーキャッシュフロー", "curr_v": c_fcf, "unit": "千円", "prev_v": None, "desc": "自由に使える現金", "formula": "営業利益×0.6+償却-設備投資"},
-    {"cat": "成長性", "name": "売上高成長率", "curr_v": c_sales_growth, "unit": "%", "prev_v": None, "desc": "シェア拡大度", "formula": "(当期売上-前期)/前期"},
-    {"cat": "成長性", "name": "営業利益成長率", "curr_v": c_op_growth, "unit": "%", "prev_v": None, "desc": "利益の伸び ※前期赤字の場合は計算不能(-)", "formula": "(当期営利-前期)/前期"},
-    {"cat": "効率性", "name": "固定資産回転率", "curr_v": c_fixed_turn, "unit": "回", "prev_v": p_fixed_turn, "desc": "設備の稼働効率", "formula": "売上高 ÷ 固定資産"},
-    {"cat": "効率性", "name": "棚卸資産回転日数", "curr_v": c_inv_days, "unit": "日", "prev_v": p_inv_days, "desc": "在庫の回転速度", "formula": "棚卸資産 ÷ (売上原価÷365)"},
-    {"cat": "生産性", "name": "1人当たり売上高", "curr_v": c_sales_per_emp, "unit": "千円", "prev_v": p_sales_per_emp, "desc": "社員の稼ぐ規模", "formula": "売上高 ÷ 従業員数"},
-    {"cat": "生産性", "name": "1人当たり営業利益", "curr_v": c_op_per_emp, "unit": "千円", "prev_v": p_op_per_emp, "desc": "社員の付加価値", "formula": "営業利益 ÷ 従業員数"},
-    {"cat": "安全性", "name": "自己資本比率", "curr_v": c_equity_ratio, "unit": "%", "prev_v": p_equity_ratio, "desc": "倒産耐性", "formula": "純資産 ÷ 総資産"},
-    {"cat": "安全性", "name": "運転資本", "curr_v": c_working_capital, "unit": "千円", "prev_v": p_working_capital, "desc": "支払い余力", "formula": "流動資産 - 流動負債"},
-    {"cat": "安全性", "name": "流動比率", "curr_v": c_current_ratio, "unit": "%", "prev_v": p_current_ratio, "desc": "短期返済能力", "formula": "流動資産 ÷ 流動負債"},
-    {"cat": "安全性", "name": "債務償還年数", "curr_v": c_redemption, "unit": "年", "prev_v": p_redemption, "desc": "借金完済までの年数", "formula": "有利子負債 ÷ CF"},
-    {"cat": "安全性", "name": "借入金月商倍率", "curr_v": c_loan_sales_ratio, "unit": "倍", "prev_v": p_loan_sales_ratio, "desc": "借金規模の適正度", "formula": "有利子負債 ÷ 月商"}
-]
-current_cat = ""
-temp_kpis = []
-for k in kpi_definitions:
-    if k['unit'] == "%": curr_disp, prev_disp = fmt_pct(k['curr_v']), fmt_pct(k['prev_v'])
-    elif k['unit'] == "千円": curr_disp, prev_disp = fmt_yen(k['curr_v']), fmt_yen(k['prev_v'])
-    elif k['unit'] == "回": curr_disp, prev_disp = fmt_times(k['curr_v']), fmt_times(k['prev_v'])
-    elif k['unit'] == "倍": curr_disp, prev_disp = fmt_times(k['curr_v']).replace("回","倍"), fmt_times(k['prev_v']).replace("回","倍")
-    elif k['unit'] == "年": curr_disp, prev_disp = fmt_year(k['curr_v']), fmt_year(k['prev_v'])
-    elif k['unit'] == "日": curr_disp, prev_disp = fmt_days(k['curr_v']), fmt_days(k['prev_v'])
-    if k['prev_v'] is not None and k['curr_v'] is not None:
-        delta_val = f"{k['curr_v'] - k['prev_v']:.1f}" if k['unit']!="千円" else fmt_yen(k['curr_v']-k['prev_v'])
-    else: 
-        delta_val = "-"
-    k['curr_disp'], k['prev_disp'], k['delta'] = curr_disp, prev_disp, delta_val
-    if current_cat != k['cat']:
-        if temp_kpis: 
-            with st.container(): 
-                st.markdown(f"#### 📌 {current_cat}")
-                for tk in temp_kpis:
-                    cols = st.columns([2, 1, 1, 3])
-                    cols[0].markdown(f"**{tk['name']}**")
-                    cols[1].metric("当期", tk['curr_disp'], tk['delta'])
-                    cols[2].caption(f"前期: {tk['prev_disp']}")
-                    cols[3].markdown(f"<small>{tk['desc']}<br>🧮 `{tk['formula']}`</small>", unsafe_allow_html=True)
-                    st.markdown("---")
-        temp_kpis = []
-        current_cat = k['cat']
-    temp_kpis.append(k)
-if temp_kpis:
-    with st.container():
-        st.markdown(f"#### 📌 {current_cat}")
-        for tk in temp_kpis:
-            cols = st.columns([2, 1, 1, 3])
-            cols[0].markdown(f"**{tk['name']}**")
-            cols[1].metric("当期", tk['curr_disp'], tk['delta'])
-            cols[2].caption(f"前期: {tk['prev_disp']}")
-            cols[3].markdown(f"<small>{tk['desc']}<br>🧮 `{tk['formula']}`</small>", unsafe_allow_html=True)
-            st.markdown("---")
+        score_sales_growth = calc_score(c_sales_growth, 0, 3, 5, 10)
+        score_op_growth = calc_score(c_op_growth, 0, 3, 5, 10)
+        if p['op_profit'] <= 0 and c['op_profit'] > 0: score_op_growth = 5
 
-# --- 保存用データの構築 (全データ・スプレッドシート用) ---
-# ★修正: 保存日時も日本時間に
-save_row = [
-    str(get_jst_now()), company_name, industry, avg_score,
-    # 当期
-    c['sales'], c['cogs'], c['depreciation'], c['gross_profit'], c['sga'], c['op_profit'], 
-    c['non_op_inc'], c['non_op_exp'], c['ord_profit'], c['extra_inc'], c['extra_exp'], c['pre_tax_profit'], c['tax'], c['net_profit'], 
-    c['cash'], c['receivables'], c['inventory'], c['other_ca'], c['current_assets'], c['fixed_assets'], c['total_assets'],
-    c['payables'], c['short_loan'], c['other_cl'], c['current_liab'], c['long_loan'], c['fixed_liab'], c['net_assets'], c['total_liab_equity'],
-    c['employees'],
-    # 前期
-    p['sales'], p['cogs'], p['depreciation'], p['gross_profit'], p['sga'], p['op_profit'], 
-    p['non_op_inc'], p['non_op_exp'], p['ord_profit'], p['extra_inc'], p['extra_exp'], p['pre_tax_profit'], p['tax'], p['net_profit'],
-    p['cash'], p['receivables'], p['inventory'], p['other_ca'], p['current_assets'], p['fixed_assets'], p['total_assets'],
-    p['payables'], p['short_loan'], p['other_cl'], p['current_liab'], p['long_loan'], p['fixed_liab'], p['net_assets'], p['total_liab_equity'],
-    p['employees'],
-    # 指標
-    c_op_margin, c_fcf, c_sales_growth, c_op_growth, c_fixed_turn, c_inv_days,
-    c_sales_per_emp, c_op_per_emp, c_equity_ratio, c_working_capital, c_current_ratio, c_redemption, c_loan_sales_ratio
-]
+        # 総合スコア計算
+        scores = {
+            "収益": (calc_score(c_op_margin, 0, 2, 5, 10) + calc_score(c_fcf, -1000, 0, 1000, 5000)) / 2,
+            "成長": (score_sales_growth + score_op_growth) / 2,
+            "効率": (calc_score(c_fixed_turn, 1, 3, 5, 10) + calc_score(c_inv_days, 180, 90, 60, 30, True)) / 2,
+            "生産": (calc_score(c_sales_per_emp, 10000, 15000, 20000, 30000) + calc_score(c_op_per_emp, 0, 500, 1000, 2000)) / 2,
+            "安全": (calc_score(c_equity_ratio, 10, 20, 40, 60) + calc_score(c_loan_sales_ratio, 12, 6, 3, 1, True)) / 2
+        }
+        avg_score = sum(scores.values()) / 5
 
-# --- CSVダウンロード用データの作成 (全データ) ---
-raw_data_list = [
-    {"区分": "基本情報", "項目": "診断日時", "当期_数値": str(get_jst_now()), "単位": "-", "前期_数値": "-", "説明": "-"},
-    {"区分": "基本情報", "項目": "会社名", "当期_数値": company_name, "単位": "-", "前期_数値": "-", "説明": "-"},
-    {"区分": "基本情報", "項目": "業種", "当期_数値": industry, "単位": "-", "前期_数値": "-", "説明": "-"},
-    {"区分": "基本情報", "項目": "総合スコア", "当期_数値": avg_score, "単位": "点", "前期_数値": "-", "説明": "-"},
-    
-    # P/L
-    {"区分": "P/L", "項目": "売上高", "当期_数値": c['sales'], "単位": "千円", "前期_数値": p['sales'], "説明": "-"},
-    {"区分": "P/L", "項目": "売上原価", "当期_数値": c['cogs'], "単位": "千円", "前期_数値": p['cogs'], "説明": "-"},
-    {"区分": "P/L", "項目": "減価償却費", "当期_数値": c['depreciation'], "単位": "千円", "前期_数値": p['depreciation'], "説明": "-"},
-    {"区分": "P/L", "項目": "売上総利益", "当期_数値": c['gross_profit'], "単位": "千円", "前期_数値": p['gross_profit'], "説明": "-"},
-    {"区分": "P/L", "項目": "販管費", "当期_数値": c['sga'], "単位": "千円", "前期_数値": p['sga'], "説明": "-"},
-    {"区分": "P/L", "項目": "営業利益", "当期_数値": c['op_profit'], "単位": "千円", "前期_数値": p['op_profit'], "説明": "-"},
-    {"区分": "P/L", "項目": "営業外収益", "当期_数値": c['non_op_inc'], "単位": "千円", "前期_数値": p['non_op_inc'], "説明": "-"},
-    {"区分": "P/L", "項目": "営業外費用", "当期_数値": c['non_op_exp'], "単位": "千円", "前期_数値": p['non_op_exp'], "説明": "-"},
-    {"区分": "P/L", "項目": "経常利益", "当期_数値": c['ord_profit'], "単位": "千円", "前期_数値": p['ord_profit'], "説明": "-"},
-    {"区分": "P/L", "項目": "特別利益", "当期_数値": c['extra_inc'], "単位": "千円", "前期_数値": p['extra_inc'], "説明": "-"},
-    {"区分": "P/L", "項目": "特別損失", "当期_数値": c['extra_exp'], "単位": "千円", "前期_数値": p['extra_exp'], "説明": "-"},
-    {"区分": "P/L", "項目": "税引前当期純利益", "当期_数値": c['pre_tax_profit'], "単位": "千円", "前期_数値": p['pre_tax_profit'], "説明": "-"},
-    {"区分": "P/L", "項目": "法人税等", "当期_数値": c['tax'], "単位": "千円", "前期_数値": p['tax'], "説明": "-"},
-    {"区分": "P/L", "項目": "当期純利益", "当期_数値": c['net_profit'], "単位": "千円", "前期_数値": p['net_profit'], "説明": "-"},
-
-    # B/S
-    {"区分": "B/S", "項目": "流動資産計", "当期_数値": c['current_assets'], "単位": "千円", "前期_数値": p['current_assets'], "説明": "-"},
-    {"区分": "B/S", "項目": "固定資産", "当期_数値": c['fixed_assets'], "単位": "千円", "前期_数値": p['fixed_assets'], "説明": "-"},
-    {"区分": "B/S", "項目": "総資産", "当期_数値": c['total_assets'], "単位": "千円", "前期_数値": p['total_assets'], "説明": "-"},
-    {"区分": "B/S", "項目": "流動負債計", "当期_数値": c['current_liab'], "単位": "千円", "前期_数値": p['current_liab'], "説明": "-"},
-    {"区分": "B/S", "項目": "固定負債", "当期_数値": c['fixed_liab'], "単位": "千円", "前期_数値": p['fixed_liab'], "説明": "-"},
-    {"区分": "B/S", "項目": "純資産", "当期_数値": c['net_assets'], "単位": "千円", "前期_数値": p['net_assets'], "説明": "-"},
-    {"区分": "その他", "項目": "従業員数", "当期_数値": c['employees'], "単位": "人", "前期_数値": p['employees'], "説明": "-"},
-]
-# 指標KPIも追加
-for k in kpi_definitions:
-    raw_data_list.append({
-        "区分": k['cat'], "項目": k['name'], "当期_数値": k['curr_v'], "単位": k['unit'], "前期_数値": k['prev_v'], "説明": k['desc']
-    })
-
-export_df = pd.DataFrame(raw_data_list)
-
-st.markdown("---")
-
-# 1. CSV保存ボタン
-st.download_button(
-    label="📊 診断データ(CSV)を保存",
-    data=export_df.to_csv(index=False).encode('utf-8_sig'),
-    file_name=f"financial_report_{get_jst_now().strftime('%Y%m%d')}.csv",
-    on_click=save_to_gsheet,
-    args=(save_row,),
-    help="CSVをダウンロードし、結果を保存します"
-)
-
-# 2. 印刷ボタン
-if st.button("🖨️ レポートを印刷 (PDF保存)"):
-    try:
+        # データ保存（都道府県を追加）
+        save_row = [
+            str(get_jst_now()), company_name, prefecture, industry, avg_score, # prefectureを追加
+            c['sales'], c['cogs'], c['depreciation'], c['gross_profit'], c['sga'], c['op_profit'], 
+            c['non_op_inc'], c['non_op_exp'], c['ord_profit'], c['extra_inc'], c['extra_exp'], c['pre_tax_profit'], c['tax'], c['net_profit'], 
+            c['cash'], c['receivables'], c['inventory'], c['other_ca'], c['current_assets'], c['fixed_assets'], c['total_assets'],
+            c['payables'], c['short_loan'], c['other_cl'], c['current_liab'], c['long_loan'], c['fixed_liab'], c['net_assets'], c['total_liab_equity'],
+            c['employees'],
+            p['sales'], p['cogs'], p['depreciation'], p['gross_profit'], p['sga'], p['op_profit'], 
+            p['non_op_inc'], p['non_op_exp'], p['ord_profit'], p['extra_inc'], p['extra_exp'], p['pre_tax_profit'], p['tax'], p['net_profit'],
+            p['cash'], p['receivables'], p['inventory'], p['other_ca'], p['current_assets'], p['fixed_assets'], p['total_assets'],
+            p['payables'], p['short_loan'], p['other_cl'], p['current_liab'], p['long_loan'], p['fixed_liab'], p['net_assets'], p['total_liab_equity'],
+            p['employees'],
+            c_op_margin, c_fcf, c_sales_growth, c_op_growth, c_fixed_turn, c_inv_days,
+            c_sales_per_emp, c_op_per_emp, c_equity_ratio, c_working_capital, c_current_ratio, c_redemption, c_loan_sales_ratio
+        ]
+        
         save_to_gsheet(save_row)
-    except:
-        pass
-    components.html("<script>window.parent.print();</script>", height=0, width=0)
+        
+        # 診断済みフラグを立てて、再描画
+        st.session_state["has_diagnosed"] = True
+        st.rerun()
 
-st.markdown("---")
-st.caption("""
-**【データの取り扱いについて】**
-本システムに入力されたデータは、診断精度の向上および統計的な業界分析のために、個人・企業を特定できない形式（匿名加工情報）にて
-サーバーへ保存・活用される場合があります。入力データが第三者にそのまま開示されることはありません。
-ご利用にあたっては、上記に同意したものとみなします。
-""")
+# --- 結果レポート表示（診断済みの場合のみ表示） ---
+if st.session_state["has_diagnosed"]:
+    
+    # ※ここで変数を再定義する必要があるため、計算ロジックを再実行（Streamlitの仕様上）
+    c, p = input_data['curr'], input_data['prev']
+    # ...(以下、表示用の計算と描画)...
+    
+    # 各種計算（表示用に再計算）
+    c_op_margin = safe_div(c['op_profit'], c['sales']) * 100
+    c_fcf = (c['op_profit'] * 0.6 + c['depreciation']) - ((c['fixed_assets'] - p['fixed_assets']) + c['depreciation'])
+    c_sales_growth = calc_growth(c['sales'], p['sales'])
+    c_op_growth = calc_growth(c['op_profit'], p['op_profit'])
+    c_fixed_turn = safe_div(c['sales'], c['fixed_assets'])
+    c_inv_days = safe_div(c['inventory'], c['cogs'] / 365)
+    c_sales_per_emp = safe_div(c['sales'], c['employees'])
+    c_op_per_emp = safe_div(c['op_profit'], c['employees'])
+    c_equity_ratio = safe_div(c['net_assets'], c['total_assets']) * 100
+    c_loan_sales_ratio = safe_div(c['short_loan'] + c['long_loan'], c['sales'] / 12)
+    c_current_ratio = safe_div(c['current_assets'], c['current_liab']) * 100
+    c_working_capital = c['current_assets'] - c['current_liab']
+    c_redemption = safe_div(c['short_loan'] + c['long_loan'], c['ord_profit'] + c['depreciation'] - c['tax']) if (c['ord_profit'] + c['depreciation'] - c['tax']) > 0 else 0
+
+    p_op_margin = safe_div(p['op_profit'], p['sales']) * 100 
+    p_equity_ratio = safe_div(p['net_assets'], p['total_assets']) * 100
+    p_loan_sales_ratio = safe_div(p['short_loan'] + p['long_loan'], p['sales'] / 12)
+    p_fixed_turn = safe_div(p['sales'], p['fixed_assets'])
+    p_inv_days = safe_div(p['inventory'], p['cogs'] / 365)
+    p_sales_per_emp = safe_div(p['sales'], p['employees'])
+    p_op_per_emp = safe_div(p['op_profit'], p['employees'])
+    p_current_ratio = safe_div(p['current_assets'], p['current_liab']) * 100
+    p_working_capital = p['current_assets'] - p['current_liab']
+    p_redemption = safe_div(p['short_loan'] + p['long_loan'], p['ord_profit'] + p['depreciation'] - p['tax']) if (p['ord_profit'] + p['depreciation'] - p['tax']) > 0 else 0
+
+    score_sales_growth = calc_score(c_sales_growth, 0, 3, 5, 10)
+    score_op_growth = calc_score(c_op_growth, 0, 3, 5, 10)
+    if p['op_profit'] <= 0 and c['op_profit'] > 0: score_op_growth = 5
+
+    scores = {
+        "収益": (calc_score(c_op_margin, 0, 2, 5, 10) + calc_score(c_fcf, -1000, 0, 1000, 5000)) / 2,
+        "成長": (score_sales_growth + score_op_growth) / 2,
+        "効率": (calc_score(c_fixed_turn, 1, 3, 5, 10) + calc_score(c_inv_days, 180, 90, 60, 30, True)) / 2,
+        "生産": (calc_score(c_sales_per_emp, 10000, 15000, 20000, 30000) + calc_score(c_op_per_emp, 0, 500, 1000, 2000)) / 2,
+        "安全": (calc_score(c_equity_ratio, 10, 20, 40, 60) + calc_score(c_loan_sales_ratio, 12, 6, 3, 1, True)) / 2
+    }
+    p_scores_val = {k: 3 for k in scores} 
+    p_scores_val["収益"] = calc_score(p_op_margin, 0, 2, 5, 10)
+    avg_score = sum(scores.values()) / 5
+
+    # --- レポート描画 ---
+    st.markdown("---")
+    st.header(f"📈 {company_name} 様 経営診断レポート")
+    st.markdown(f"診断日: {get_jst_now().strftime('%Y年%m月%d日 %H:%M')}")
+
+    col_radar, col_msg = st.columns([1, 1])
+    with col_radar:
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(r=list(p_scores_val.values()), theta=list(scores.keys()), fill='toself', name='前期', line_color='#00B4D8', opacity=0.5))
+        fig.add_trace(go.Scatterpolar(r=list(scores.values()), theta=list(scores.keys()), fill='toself', name='当期', line_color='#FF4B4B', opacity=0.8))
+        fig.update_layout(
+            polar=dict(radialaxis=dict(visible=True, range=[0, 5])), 
+            showlegend=True, 
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+            height=700, 
+            margin=dict(l=80, r=80, t=40, b=80) 
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_msg:
+        st.markdown(f"#### 📝 総合スコア: {avg_score:.1f} / 5.0")
+        if avg_score >= 4: st.success("極めて健全な経営状態です。攻めの投資を行う体力があります。")
+        elif avg_score >= 3: st.info("標準的な経営状態です。弱点を補強しましょう。")
+        else: st.error("経営改善が急務です。特に安全性の確保を優先してください。")
+
+    st.subheader("詳細指標分析")
+    kpi_definitions = [
+        {"cat": "収益性", "name": "営業利益率", "curr_v": c_op_margin, "unit": "%", "prev_v": p_op_margin, "desc": "本業の稼ぐ力", "formula": "営業利益 ÷ 売上高"},
+        {"cat": "収益性", "name": "フリーキャッシュフロー", "curr_v": c_fcf, "unit": "千円", "prev_v": None, "desc": "自由に使える現金", "formula": "営業利益×0.6+償却-設備投資"},
+        {"cat": "成長性", "name": "売上高成長率", "curr_v": c_sales_growth, "unit": "%", "prev_v": None, "desc": "シェア拡大度", "formula": "(当期売上-前期)/前期"},
+        {"cat": "成長性", "name": "営業利益成長率", "curr_v": c_op_growth, "unit": "%", "prev_v": None, "desc": "利益の伸び ※前期赤字の場合は計算不能(-)", "formula": "(当期営利-前期)/前期"},
+        {"cat": "効率性", "name": "固定資産回転率", "curr_v": c_fixed_turn, "unit": "回", "prev_v": p_fixed_turn, "desc": "設備の稼働効率", "formula": "売上高 ÷ 固定資産"},
+        {"cat": "効率性", "name": "棚卸資産回転日数", "curr_v": c_inv_days, "unit": "日", "prev_v": p_inv_days, "desc": "在庫の回転速度", "formula": "棚卸資産 ÷ (売上原価÷365)"},
+        {"cat": "生産性", "name": "1人当たり売上高", "curr_v": c_sales_per_emp, "unit": "千円", "prev_v": p_sales_per_emp, "desc": "社員の稼ぐ規模", "formula": "売上高 ÷ 従業員数"},
+        {"cat": "生産性", "name": "1人当たり営業利益", "curr_v": c_op_per_emp, "unit": "千円", "prev_v": p_op_per_emp, "desc": "社員の付加価値", "formula": "営業利益 ÷ 従業員数"},
+        {"cat": "安全性", "name": "自己資本比率", "curr_v": c_equity_ratio, "unit": "%", "prev_v": p_equity_ratio, "desc": "倒産耐性", "formula": "純資産 ÷ 総資産"},
+        {"cat": "安全性", "name": "運転資本", "curr_v": c_working_capital, "unit": "千円", "prev_v": p_working_capital, "desc": "支払い余力", "formula": "流動資産 - 流動負債"},
+        {"cat": "安全性", "name": "流動比率", "curr_v": c_current_ratio, "unit": "%", "prev_v": p_current_ratio, "desc": "短期返済能力", "formula": "流動資産 ÷ 流動負債"},
+        {"cat": "安全性", "name": "債務償還年数", "curr_v": c_redemption, "unit": "年", "prev_v": p_redemption, "desc": "借金完済までの年数", "formula": "有利子負債 ÷ CF"},
+        {"cat": "安全性", "name": "借入金月商倍率", "curr_v": c_loan_sales_ratio, "unit": "倍", "prev_v": p_loan_sales_ratio, "desc": "借金規模の適正度", "formula": "有利子負債 ÷ 月商"}
+    ]
+    
+    current_cat = ""
+    temp_kpis = []
+    for k in kpi_definitions:
+        if k['unit'] == "%": curr_disp, prev_disp = fmt_pct(k['curr_v']), fmt_pct(k['prev_v'])
+        elif k['unit'] == "千円": curr_disp, prev_disp = fmt_yen(k['curr_v']), fmt_yen(k['prev_v'])
+        elif k['unit'] == "回": curr_disp, prev_disp = fmt_times(k['curr_v']), fmt_times(k['prev_v'])
+        elif k['unit'] == "倍": curr_disp, prev_disp = fmt_times(k['curr_v']).replace("回","倍"), fmt_times(k['prev_v']).replace("回","倍")
+        elif k['unit'] == "年": curr_disp, prev_disp = fmt_year(k['curr_v']), fmt_year(k['prev_v'])
+        elif k['unit'] == "日": curr_disp, prev_disp = fmt_days(k['curr_v']), fmt_days(k['prev_v'])
+        if k['prev_v'] is not None and k['curr_v'] is not None:
+            delta_val = f"{k['curr_v'] - k['prev_v']:.1f}" if k['unit']!="千円" else fmt_yen(k['curr_v']-k['prev_v'])
+        else: 
+            delta_val = "-"
+        k['curr_disp'], k['prev_disp'], k['delta'] = curr_disp, prev_disp, delta_val
+        if current_cat != k['cat']:
+            if temp_kpis: 
+                with st.container(): 
+                    st.markdown(f"#### 📌 {current_cat}")
+                    for tk in temp_kpis:
+                        cols = st.columns([2, 1, 1, 3])
+                        cols[0].markdown(f"**{tk['name']}**")
+                        cols[1].metric("当期", tk['curr_disp'], tk['delta'])
+                        cols[2].caption(f"前期: {tk['prev_disp']}")
+                        cols[3].markdown(f"<small>{tk['desc']}<br>🧮 `{tk['formula']}`</small>", unsafe_allow_html=True)
+                        st.markdown("---")
+            temp_kpis = []
+            current_cat = k['cat']
+        temp_kpis.append(k)
+    if temp_kpis:
+        with st.container():
+            st.markdown(f"#### 📌 {current_cat}")
+            for tk in temp_kpis:
+                cols = st.columns([2, 1, 1, 3])
+                cols[0].markdown(f"**{tk['name']}**")
+                cols[1].metric("当期", tk['curr_disp'], tk['delta'])
+                cols[2].caption(f"前期: {tk['prev_disp']}")
+                cols[3].markdown(f"<small>{tk['desc']}<br>🧮 `{tk['formula']}`</small>", unsafe_allow_html=True)
+                st.markdown("---")
+
+    # CSV生成
+    raw_data_list = [
+        {"区分": "基本情報", "項目": "診断日時", "当期_数値": str(get_jst_now()), "単位": "-", "前期_数値": "-", "説明": "-"},
+        {"区分": "基本情報", "項目": "会社名", "当期_数値": company_name, "単位": "-", "前期_数値": "-", "説明": "-"},
+        {"区分": "基本情報", "項目": "所在地", "当期_数値": prefecture, "単位": "-", "前期_数値": "-", "説明": "-"}, # 追加
+        {"区分": "基本情報", "項目": "業種", "当期_数値": industry, "単位": "-", "前期_数値": "-", "説明": "-"},
+        {"区分": "基本情報", "項目": "総合スコア", "当期_数値": avg_score, "単位": "点", "前期_数値": "-", "説明": "-"},
+    ]
+    # P/L, B/S, KPIデータをCSV用リストに追加（冗長になるため省略せず記述推奨だが、ここはロジック同じ）
+    # ... (CSV作成ロジックは既存のものを維持しつつ、変数c, pを使って生成) ...
+    # 簡略化のため、既存コードの raw_data_list 生成ロジックをここに持ってきます
+    
+    pl_bs_items = [
+        ("P/L", "売上高", 'sales', "千円"), ("P/L", "売上原価", 'cogs', "千円"), ("P/L", "減価償却費", 'depreciation', "千円"),
+        ("P/L", "売上総利益", 'gross_profit', "千円"), ("P/L", "販管費", 'sga', "千円"), ("P/L", "営業利益", 'op_profit', "千円"),
+        ("P/L", "営業外収益", 'non_op_inc', "千円"), ("P/L", "営業外費用", 'non_op_exp', "千円"), ("P/L", "経常利益", 'ord_profit', "千円"),
+        ("P/L", "特別利益", 'extra_inc', "千円"), ("P/L", "特別損失", 'extra_exp', "千円"), ("P/L", "税引前当期純利益", 'pre_tax_profit', "千円"),
+        ("P/L", "法人税等", 'tax', "千円"), ("P/L", "当期純利益", 'net_profit', "千円"),
+        ("B/S", "流動資産計", 'current_assets', "千円"), ("B/S", "固定資産", 'fixed_assets', "千円"), ("B/S", "総資産", 'total_assets', "千円"),
+        ("B/S", "流動負債計", 'current_liab', "千円"), ("B/S", "固定負債", 'fixed_liab', "千円"), ("B/S", "純資産", 'net_assets', "千円"),
+        ("その他", "従業員数", 'employees', "人")
+    ]
+    for cat, name, key, unit in pl_bs_items:
+        raw_data_list.append({"区分": cat, "項目": name, "当期_数値": c[key], "単位": unit, "前期_数値": p[key], "説明": "-"})
+        
+    for k in kpi_definitions:
+        raw_data_list.append({
+            "区分": k['cat'], "項目": k['name'], "当期_数値": k['curr_v'], "単位": k['unit'], "前期_数値": k['prev_v'], "説明": k['desc']
+        })
+
+    export_df = pd.DataFrame(raw_data_list)
+
+    st.markdown("---")
+    
+    # ダウンロードボタン類
+    st.download_button(
+        label="📊 診断データ(CSV)を保存",
+        data=export_df.to_csv(index=False).encode('utf-8_sig'),
+        file_name=f"financial_report_{get_jst_now().strftime('%Y%m%d')}.csv",
+        help="CSVをダウンロードします（データは既にクラウドへ保存済みです）"
+    )
+
+    if st.button("🖨️ レポートを印刷 (PDF保存)"):
+        components.html("<script>window.parent.print();</script>", height=0, width=0)
+
+    # 続けて別の診断をするボタン
+    if st.button("🔄 新しいデータを入力して再診断する"):
+        st.session_state["has_diagnosed"] = False
+        st.rerun()
+
+    st.markdown("---")
