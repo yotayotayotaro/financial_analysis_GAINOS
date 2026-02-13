@@ -50,24 +50,37 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Google Sheets 保存関数（制限なし・シンプル版） ---
+# --- Google Sheets 保存関数（結果通知機能付き） ---
 def save_to_gsheet(data_row):
     try:
-        if "gcp_service_account" not in st.secrets: return
+        # Secretsのチェック
+        if "gcp_service_account" not in st.secrets:
+            st.error("🚨 エラー: Secrets設定が見つかりません。")
+            return
         
         # 認証とシートオープン
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds_dict = st.secrets["gcp_service_account"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        sheet = client.open("financial_db").sheet1
         
-        # データの書き込み（無条件で追記）
+        # シートを開く（名前が合っているか注意）
+        sheet_name = "financial_db"
+        try:
+            sheet = client.open(sheet_name).sheet1
+        except gspread.SpreadsheetNotFound:
+            st.error(f"🚨 エラー: スプレッドシート '{sheet_name}' が見つかりません。")
+            return
+        
+        # データの書き込み
         sheet.append_row(data_row)
         
+        # 成功通知（画面右下にポップアップが出ます）
+        st.toast("クラウドへの保存に成功しました！", icon="✅")
+        
     except Exception as e:
-        # エラー時はコンソールに出力（ユーザーには見せないがログに残す）
-        print(f"Data Save Error: {e}")
+        # エラー詳細を画面に表示
+        st.error(f"🚨 保存エラー発生: {e}")
 
 # --- 関数群 ---
 def fmt_yen(val): return f"{int(val):,} 千円" if val is not None else "-"
@@ -148,7 +161,6 @@ if st.button("▶ サンプル数値で試す（入力の手間を省略）", he
 with st.expander("📝 データの入力・修正（クリックで開閉）", expanded=True):
     st.info("💡 入力単位は**「千円」**です。Enterキーを押すと即座に反映されます。")
     col_basic1, col_basic2 = st.columns(2)
-    # 初期値は空欄（プレースホルダーのみ）にしたいが、数値型なので0を表示
     company_name = col_basic1.text_input("会社名", "")
     industry = col_basic2.selectbox("業種", ["製造業", "建設業", "卸売業", "小売業", "サービス業", "その他"])
     input_data = {}
@@ -158,7 +170,6 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
         st.markdown(f"### {label_color}")
         col1, col2, col3 = st.columns(3)
         
-        # 初期値をすべて0にする
         def num_input(label, key, val=0):
             if key not in st.session_state:
                 st.session_state[key] = int(val)
