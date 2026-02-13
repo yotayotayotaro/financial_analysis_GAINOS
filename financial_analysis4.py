@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta, timezone # ★修正: 時間計算用のモジュールを追加
 import streamlit.components.v1 as components
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -50,36 +50,18 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Google Sheets 保存関数（結果通知機能付き） ---
+# --- Google Sheets 保存関数 ---
 def save_to_gsheet(data_row):
     try:
-        # Secretsのチェック
-        if "gcp_service_account" not in st.secrets:
-            st.error("🚨 エラー: Secrets設定が見つかりません。")
-            return
-        
-        # 認証とシートオープン
+        if "gcp_service_account" not in st.secrets: return
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds_dict = st.secrets["gcp_service_account"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        
-        # シートを開く（名前が合っているか注意）
-        sheet_name = "financial_db"
-        try:
-            sheet = client.open(sheet_name).sheet1
-        except gspread.SpreadsheetNotFound:
-            st.error(f"🚨 エラー: スプレッドシート '{sheet_name}' が見つかりません。")
-            return
-        
-        # データの書き込み
+        sheet = client.open("financial_db").sheet1
         sheet.append_row(data_row)
-        
-        # 成功通知（画面右下にポップアップが出ます）
-        st.toast("クラウドへの保存に成功しました！", icon="✅")
-        
+        st.toast("クラウドへの保存に成功しました！", icon="✅") # 成功通知
     except Exception as e:
-        # エラー詳細を画面に表示
         st.error(f"🚨 保存エラー発生: {e}")
 
 # --- 関数群 ---
@@ -107,13 +89,17 @@ def calc_score(val, t1, t2, t3, t4, lower_is_better=False):
         elif val >= t1: return 2
         else: return 1
 
+# --- 日本時間の取得関数 ---
+def get_jst_now():
+    JST = timezone(timedelta(hours=9), 'JST')
+    return datetime.now(JST)
+
 # --- メイン画面 ---
 st.title("📏 経営判断の「ものさし」 by かんぎアドバイザーズ")
 st.markdown("数値を入れると**リアルタイム**で診断結果が変化します。")
 
 # サンプルデータ注入ボタン
 if st.button("▶ サンプル数値で試す（入力の手間を省略）", help="クリックすると架空の数値が自動入力されます"):
-    # 当期サンプル
     st.session_state["sales_curr"] = 100000
     st.session_state["cogs_curr"] = 70000
     st.session_state["dep_curr"] = 2000
@@ -134,7 +120,7 @@ if st.button("▶ サンプル数値で試す（入力の手間を省略）", he
     st.session_state["ll_curr"] = 20000
     st.session_state["na_curr"] = 13000
     st.session_state["emp_curr"] = 10
-    # 前期サンプル
+    
     st.session_state["sales_prev"] = 90000
     st.session_state["cogs_prev"] = 63000
     st.session_state["dep_prev"] = 2000
@@ -177,7 +163,7 @@ with st.expander("📝 データの入力・修正（クリックで開閉）", 
         
         with col1:
             st.markdown("##### P/L (損益計算書)")
-            d['sales'] = num_input("売上高", f"sales_{key_suffix}", 0) 
+            d['sales'] = num_input("売上高", f"sales_{key_suffix}", 0)
             d['cogs'] = num_input("売上原価", f"cogs_{key_suffix}", 0)
             d['depreciation'] = num_input("  うち減価償却費", f"dep_{key_suffix}", 0)
             d['gross_profit'] = d['sales'] - d['cogs']
@@ -277,7 +263,8 @@ p_scores_val["収益"] = calc_score(p_op_margin, 0, 2, 5, 10)
 # --- レポート表示 ---
 st.markdown("---")
 st.header(f"📈 {company_name} 様 経営診断レポート")
-st.markdown(f"診断日: {datetime.now().strftime('%Y年%m月%d日')}")
+# ★修正: 表示も日本時間に
+st.markdown(f"診断日: {get_jst_now().strftime('%Y年%m月%d日 %H:%M')}")
 
 col_radar, col_msg = st.columns([1, 1])
 with col_radar:
@@ -356,8 +343,9 @@ if temp_kpis:
             st.markdown("---")
 
 # --- 保存用データの構築 (全データ・スプレッドシート用) ---
+# ★修正: 保存日時も日本時間に
 save_row = [
-    str(datetime.now()), company_name, industry, avg_score,
+    str(get_jst_now()), company_name, industry, avg_score,
     # 当期
     c['sales'], c['cogs'], c['depreciation'], c['gross_profit'], c['sga'], c['op_profit'], 
     c['non_op_inc'], c['non_op_exp'], c['ord_profit'], c['extra_inc'], c['extra_exp'], c['pre_tax_profit'], c['tax'], c['net_profit'], 
@@ -377,7 +365,7 @@ save_row = [
 
 # --- CSVダウンロード用データの作成 (全データ) ---
 raw_data_list = [
-    {"区分": "基本情報", "項目": "診断日時", "当期_数値": str(datetime.now()), "単位": "-", "前期_数値": "-", "説明": "-"},
+    {"区分": "基本情報", "項目": "診断日時", "当期_数値": str(get_jst_now()), "単位": "-", "前期_数値": "-", "説明": "-"},
     {"区分": "基本情報", "項目": "会社名", "当期_数値": company_name, "単位": "-", "前期_数値": "-", "説明": "-"},
     {"区分": "基本情報", "項目": "業種", "当期_数値": industry, "単位": "-", "前期_数値": "-", "説明": "-"},
     {"区分": "基本情報", "項目": "総合スコア", "当期_数値": avg_score, "単位": "点", "前期_数値": "-", "説明": "-"},
@@ -421,7 +409,7 @@ st.markdown("---")
 st.download_button(
     label="📊 診断データ(CSV)を保存",
     data=export_df.to_csv(index=False).encode('utf-8_sig'),
-    file_name=f"financial_report_{datetime.now().strftime('%Y%m%d')}.csv",
+    file_name=f"financial_report_{get_jst_now().strftime('%Y%m%d')}.csv",
     on_click=save_to_gsheet,
     args=(save_row,),
     help="CSVをダウンロードし、結果を保存します"
